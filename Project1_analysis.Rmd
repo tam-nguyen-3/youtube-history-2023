@@ -1,0 +1,344 @@
+---
+title: "Project 1: Are you a YouTube Enthusiast? -- An Analysis of Personal YouTube Watch Histories of Two College Students"
+author: "Ngoc-Ha Vu and Tam Nguyen"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+```
+
+# I. Introduction
+
+## 1. Purpose of the Project
+
+One of the most well-known websites that we visit frequently, regardless of ages or purposes, is YouTube. We are curious to know whether this popular video-streaming platform has a significant influence in our lives -- at least in the lives of the two authors of this project -- and get insights about our watching habits on YouTube.
+
+## 2. Datasets
+
+With Google Takeout and the YouTube API, we analyzed our personal Youtube history, compared each personal data to the other’s, and took a look at the overall patterns on Youtube’s trending video. 
+
+# II. Data extraction and cleaning
+
+## Step 1. Google Takeout and Web-scraping with R
+
+To get each of our personal YouTube watch histories, we logged in the Google account that we use to watch YouTube most frequently and downloaded our watch entries from [Google Takeout](https://takeout.google.com/settings/takeout), which includes a `.html` file containing the link to each video, the title of each video, and the time stamp. The date at which we downloaded our data is September 28, 2022.
+
+![watch_history_html](/Users/tamnguyen/Desktop/watch_history_tam.png)
+Image 1. A screenshot of the html file we extracted data from.
+
+We then read the data into R using `read_html`, and get the data by extracting the desired CSS classes by `html_nodes`.
+
+```
+# READ WATCH HISTORY ----
+watchHistory <- read_html("/Users/tamnguyen/KENYON/STAT 226/Takeout 2/YouTube and YouTube Music/history/watch-history.html")
+watchedVideoContent <- watchHistory %>% 
+  html_nodes(".header-cell + .content-cell")
+```
+
+We extracted the information we needed like timestamps and video IDs by using string matching and regular expression patterns, stored them in different lists, and constructed a complete dataframe of my watch history.
+
+```
+library(stringr)
+
+# POSSIBLE TIME CHARACTERS
+watchVideoTimes <- str_match(watchedVideoContent,
+                             "<br>([A-Z].*)</div>")[,2]
+
+# POSSIBLE ID VALUES
+watchedVideoIDs <- str_match(watchedVideoContent,
+                             "watch\\?v=([a-zA-Z0-9-_]*)")[,2]
+
+# VIDEO TITLE
+watchedVideoTitles <- str_match(watchedVideoContent,
+                                "watch\\?v=[a-zA-Z0-9-_]*\">(.*?)</a>")[,2]
+
+# CONVERT TO DATA FRAME
+watchedVideosDataFrame <- data.frame(id = watchedVideoIDs, 
+                                     scrapedTitle = watchedVideoTitles, 
+                                     scrapedTime = watchVideoTimes, 
+                                     stringsAsFactors = FALSE)
+watchedVideosDataFrame$time <- mdy_hms(watchedVideosDataFrame$scrapedTime)
+
+write.csv(watchedVideosDataFrame, "/Users/tamnguyen/KENYON/STAT 226/project1/watchedVideosDataFrame.csv", row.names = FALSE)
+```
+
+The result is a dataframe containing 4 variables: `id`, `scrapedTitle`, `scrapedTime`, and `time`.  
+
+Tam's personal watch history contains 56400 entries from August 4, 2018, while that of Ha's contains 5409 rows starting from April 13, 2021. One reason for this huge gap between the time and quantity is that Ha has a habit of clearing her YouTube history regularly.
+
+
+## Step 2. Getting video details using Google YouTube Data API v3
+
+To get more data from the video IDs, I established a connection with Google Youtube data API and run a for loop to extract more details for each video ID in the dataframe. The result, the category ID was appended to a list to be later add to the dataframe.
+
+This is an example of one run:
+
+```
+# ESTABLISH API KEY AND CONNECTION + GET VIDEO CATEGORY ----
+youtubeAPIKey1 <- "XXXXXXXXXXXXXXXXXXX"
+connectionURL <- 'https://www.googleapis.com/youtube/v3/videos'
+
+## FIRST FOR LOOP WITH RECENTWATCH1 ====
+watchedVideosIDs <- watchedVideosDataFrame %>%
+  pull(id)
+
+listCategories1 <- list()
+
+for (i in 1:1000) {
+ listCategories1[[i]] <- GET(connectionURL,
+                                 query = list(
+                                   key = youtubeAPIKey1,
+                                   id = watchedVideosIDs[i],
+                                   fields = "items(id,snippet(channelId,title,categoryId))",
+                                   part = "snippet")
+                                 ) %>%
+    content("parsed") %>%
+    pluck(1,1,2,3)
+}
+
+watchedVideosDataFrame <- watchedVideosDataFrame %>%
+  mutate(category_id = as.character(listCategories1))
+write.csv(recentWatch1, "/Users/tamnguyen/KENYON/STAT 226/project1/recentWatch1.csv", row.names = FALSE)
+```
+
+We then left join the dataframe with another table containing the name of each category. The table is reproduced from Github as `category_list_yt.csv`.
+
+```
+category_list <- read_csv("/Users/tamnguyen/KENYON/STAT 226/category_list_yt.csv")
+category_list <- category_list %>%
+  mutate(id = as.character(id))
+
+recentWatch <- recentWatch %>%
+  left_join(category_list, by=c("category_id" = "id"))
+
+watched_video_df <- watched_video_df %>%
+  left_join(category_list, by=c("category_id" = "id"))
+```
+
+# III. Data wrangling and gaining insights
+
+Before beginning to do wrangling, we read our individual cleaned and API-ed dataset in.
+
+```{r}
+
+# Read my data in
+watch_df_tam <- read_csv("/Users/tamnguyen/KENYON/STAT 226/project1/watchedVideosDataFrame.csv")
+
+# Read Ha's data in
+watch_df_ha <- read_csv("/Users/tamnguyen/KENYON/STAT 226/project1/watched_video_df_ha.csv") 
+
+# Read US trending data from Feb 22 to Mar
+US_trend_df <- read_csv("/Users/tamnguyen/KENYON/STAT 226/project1/US_trend_df.csv")
+```
+
+We then performed some cleaning and union our tables together.
+
+``` {r, warning=FALSE}
+watch_df_ha <- watch_df_ha %>%
+  mutate(owner = "Ha")
+watch_df_ha_cleaned <- watch_df_ha %>%
+  select(-...1, -vid_category, -category_name)
+
+watch_df_tam <- watch_df_tam %>%
+  mutate(owner = "Tam")
+```
+
+Join Ha's and my data together
+```{r}
+watch_df_union <- watch_df_tam %>%
+  union_all(watch_df_ha_cleaned)
+```
+
+## 1. An overview of my Youtube adventure in numbers
+
+```{r}
+first_date <- min(watch_df_tam$time, na.rm=TRUE)
+last_date <- max(watch_df_tam$time, na.rm=TRUE)
+watch_interval <- as.period(interval(first_date, last_date))
+print(as.period(last_date-first_date))
+print(watch_interval)
+print(nrow(watch_df_tam))
+print(nrow(watch_df_tam) / 1515)
+```
+
+First record of youtube video in Google Takeout: Aug 04, 2018
+Last watched video: Sep 28, 2022
+Total time spent on Youtube: 4 years, 1 month, 23 days, 12 hours and 31 minutes
+Total videos I watched during this period: 56400 videos. That is an average of 37.23 videos per day for 4 years!
+
+## 2. Our YouTube watches count over time
+
+Function to calculate total watched videos for each month:
+```{r, warning=FALSE}
+get_count_per_month <- function(data) {
+  data %>%
+    mutate(month_watch = month.abb[lubridate::month(time)],
+         year_watch = lubridate::year(time)) %>%
+    mutate(month_year = paste(month_watch, year_watch)) %>%
+    group_by(month_year) %>%
+    summarize(
+      video_per_month = n()
+    ) %>%
+    mutate(month_year = lubridate::my(month_year)) %>%
+    drop_na()
+}
+```
+
+Plot of video counts over the year using group_modify
+
+```{r, warning=FALSE}
+num_vid_per_month <- watch_df_union %>%
+  group_by(owner) %>%
+  group_modify(~get_count_per_month(.x)) %>%
+  ggplot(aes(x=month_year, y=video_per_month, color=owner)) +
+  geom_point() +
+  geom_line() +
+  scale_x_date(date_labels = "%b %Y")+
+  scale_color_manual(values=c('#202021','#c1121f'))+
+  labs(
+    title = "Number of YouTube videos watched per month",
+    x = "Time",
+    y = "Number of videos",
+    legend = "Owner"
+  )
+num_vid_per_month
+ggsave(file="num_vid_per_month.svg", plot=num_vid_per_month, width=9, height=5, path="/Users/tamnguyen/KENYON/STAT 226/project1")
+
+```
+
+
+## 3. Our watch count in 2022
+
+First, we subsetted the data to limit to only 2022 videos:
+
+```{r}
+# read my data in
+watch_df_2022_tam <- read_csv("/Users/tamnguyen/KENYON/STAT 226/project1/watch_df.csv")
+watch_df_2022_tam <- watch_df_2022_tam %>%
+  mutate(owner = "Tam") %>%
+  select(-year_watch, -month_watch)
+
+# read Ha's data and filter to have only videos watched in 2022
+watch_df_2022_ha <- watch_df_ha %>%
+  filter(lubridate::year(time) == 2022) %>%
+  rename(category_id = vid_category)
+
+# union data together
+watch_df_union_2022 <- watch_df_2022_tam %>%
+  union_all(watch_df_2022_ha) %>%
+  mutate(month_watch = lubridate::month(time))
+```
+
+We then plotted the number of videos watched for each month in 2022 for each of us.
+
+
+```{r}
+num_vid_per_month_2022 <- watch_df_union_2022 %>%
+  ggplot(aes(x=as.factor(month_watch), fill=owner))+
+  geom_bar(position='dodge')+
+  scale_fill_manual("legend", values = c("Tam" = "#c1121f", "Ha" = "#202021"))+
+  labs(
+    title = "Number of videos watched each month in 2022",
+    y = "Number of videos",
+    x = "Month in 2022"
+  )
+num_vid_per_month_2022
+ggsave(file="num_vid_per_month_2022.svg", plot=num_vid_per_month_2022, width=9, height=5, path="/Users/tamnguyen/KENYON/STAT 226/project1")
+```
+Ha: May has lowest watch count had finals, went to Chicago and Wisconsin for vacation.
+Watched the most in September, but overall watched not a lot
+Tam: Flew back to Vietnam from May - August. I watch a lot of youtube shorts
+
+
+## Our watching habits
+
+### 4. Category-wise
+
+First we wrote the function to get the percentage of categories in our total watch history from 2022:
+
+```{r}
+get_watched_stats <- function(data) {
+  data %>%
+    group_by(category_name) %>%
+    summarize(
+      count_vid = n()) %>%
+    drop_na() %>%
+    arrange(desc(count_vid)) %>%
+    mutate(total_vid = sum(count_vid)) %>%
+    mutate(percentage_cat = count_vid/total_vid*100) %>%
+    mutate(category_name = ifelse(percentage_cat > 4, category_name, "Other")) %>%
+    group_by(category_name) %>%
+    summarize(
+      percentage_cat = sum(percentage_cat)
+    ) %>%
+    arrange(desc(percentage_cat))
+}
+```
+
+Next, we generate the plot by running `group_modify`.
+```{r}
+category_total_plot <- watch_df_union_2022 %>%
+  group_by(owner) %>%
+  group_modify(~get_watched_stats(.x)) %>%
+  ggplot(aes(x=factor(category_name, level=c("Other", "Education", "Howto & Style", "Entertainment", "Music", "People & Blogs")), y=round(percentage_cat,2), fill=owner)) +
+  geom_col(position = "dodge")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  geom_text(    
+    aes(label = round(percentage_cat,2), y = percentage_cat + 3.5),
+    position = position_dodge(0.85),
+    vjust = 0)+
+  coord_flip()+
+  scale_fill_manual("legend", values = c("Tam" = "#c1121f", "Ha" = "#202021"))+
+  labs(
+    title = "Percentage of most-watched video categories",
+    x = "Categories",
+    y = "Percentage"
+  )
+
+
+category_total_plot
+ggsave(file="category_total_plot.svg", plot=category_total_plot, width=9, height=5, path="/Users/tamnguyen/KENYON/STAT 226/project1")
+
+```
+
+### 5. What time do we watch Youtube videos most frequently in 2022?
+
+The first step is still to write the function so that we can use that to iterate over the `owner` group later:
+
+```{r}
+get_vid_hour <- function(data){
+  data %>%
+    mutate(hour = hour(time)) %>%
+    group_by(hour) %>%
+    summarise(count = n()) %>%
+    drop_na() %>%
+    mutate(total_vid = sum(count)) %>%
+    mutate(percentage_vid_hour = count/total_vid*100)
+}
+```
+
+Next step is iterating it over Ha and I watch history:
+```{r}
+watch_per_hour_plot <- watch_df_union_2022 %>%
+  group_by(owner) %>%
+  group_modify(~get_vid_hour(.x)) %>%
+  ggplot(aes(x=hour, y=percentage_vid_hour, color = owner))+
+  geom_point()+
+  geom_line()+
+  scale_color_manual(values=c('#202021','#c1121f'))+
+  labs(
+    title = "Percentage of videos watched in 24 hours",
+    x = "Hour in a day",
+    y = "Percentage of total videos",
+    legend = "Owner"
+  )
+
+watch_per_hour_plot
+ggsave(file="watch_per_hour_plot.svg", plot=watch_per_hour_plot, width=9, height=5, path="/Users/tamnguyen/KENYON/STAT 226/project1")
+```
+
+
+To make a better comparison, we compare our data with the trending videos on youtube to see which are the trending categories:
