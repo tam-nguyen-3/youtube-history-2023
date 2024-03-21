@@ -1,4 +1,4 @@
-# youtube-history-2023
+# Are you a YouTube Enthusiast? -- An Analysis of Personal YouTube Watch Histories of Two College Students
 An exploratory data analysis and visualization of a friend and my YouTube watch history. We crawled data using Google YouTube API. 
 
 ## Challenges
